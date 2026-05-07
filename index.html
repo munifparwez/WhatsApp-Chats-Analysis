@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Squad Analytics</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Clash+Display:wght@400;500;600;700&family=Cabinet+Grotesk:wght@400;500;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#080810;--s1:#0d0d1a;--s2:#111125;--s3:#161630;--border:#1e1e3a;--border2:#252550;--text:#e8e8ff;--muted:#5a5a8a;--dim:#3a3a6a;--r:#ff4d6d;--g:#06ffa5;--b:#4d9fff;--y:#ffd166;--p:#c77dff;--o:#ff8c42;}
@@ -577,7 +578,7 @@ input.si::placeholder{color:var(--muted);}
     <div class="sub" id="hsub">No data &mdash; import a chat to get started</div>
   </div>
   <div class="hdr-right">
-    <input type="file" id="fileInput" accept=".txt" multiple>
+    <input type="file" id="fileInput" accept=".txt,.zip" multiple>
     <button class="btn" id="openSettingsBtn" type="button">&#9881; Settings</button>
     <button class="btn accent" id="openImportBtn" type="button">&#43; Import Chats</button>
   </div>
@@ -663,9 +664,15 @@ input.si::placeholder{color:var(--muted);}
 <div id="p-heatmap" class="panel">
   <div class="cc">
     <h3>Activity Heatmap</h3>
-    <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap">
-      <select id="hmS" class="fs"></select>
-      <select id="hmY" class="fs"></select>
+    <div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label for="hmS" style="font-size:.58rem;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase">Person</label>
+        <select id="hmS" class="fs"></select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label for="hmY" style="font-size:.58rem;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase">Year</label>
+        <select id="hmY" class="fs"></select>
+      </div>
     </div>
     <div class="hmwrap"><div id="hmGrid"></div></div>
     <div style="display:flex;gap:6px;align-items:center;margin-top:14px;font-size:.6rem;color:var(--muted)">
@@ -918,6 +925,9 @@ async function bootApp(){
   }finally{
     // Always unblock the splash — whether success, error, or timeout
     APP_READY=true;
+    // Ensure button never stays stuck on "Loading…" if bootApp finished
+    const btn=document.getElementById('splashBtn');
+    if(btn&&btn.textContent.trim().startsWith('Loading'))btn.textContent='Get Started \u2192';
   }
 }
 
@@ -1961,15 +1971,52 @@ function closeImport(){
   IM_CANCEL=false;
 }
 
+// ── WHATSAPP FORMAT VALIDATOR ────────────────────────────────────────────────
+// Scans up to the first 100 non-empty lines looking for at least MIN_HITS lines
+// that match a known WhatsApp timestamp pattern. Returns an object so callers
+// can show a specific reason, not just a boolean.
+function validateWhatsAppContent(lines){
+  const MIN_HITS=3; // at least 3 real message lines required
+  const MAX_SCAN=100;
+  // Same three patterns used by parseWhatsAppLines
+  const PAT_IOS=/^\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s\d{1,2}:\d{2}/;
+  const PAT_AMPM=/^(\d{1,2}\/\d{1,2}\/\d{2,4}),\s\d{1,2}:\d{2}[\s\u202f]?(am|pm)/i;
+  const PAT_24H=/^(\d{1,2}\/\d{1,2}\/\d{2,4}),\s\d{1,2}:\d{2}\s-\s/;
+
+  let hits=0,scanned=0;
+  for(const raw of lines){
+    if(scanned>=MAX_SCAN) break;
+    const line=String(raw||'').replace(/^\uFEFF/,'').replace(/^[\u200E\u200F]/,'').trim();
+    if(!line) continue;
+    scanned++;
+    if(PAT_IOS.test(line)||PAT_AMPM.test(line)||PAT_24H.test(line)) hits++;
+  }
+
+  if(scanned===0) return {ok:false,reason:'File appears to be empty.'};
+  if(hits===0)    return {ok:false,reason:'No WhatsApp messages detected — this doesn\'t look like a WhatsApp export.'};
+  if(hits<MIN_HITS) return {ok:false,reason:`Only ${hits} recognisable message${hits===1?'':'s'} found — file may be corrupted or truncated.`};
+  return {ok:true};
+}
+
 async function parseImportFiles(files){
   document.getElementById('imFiles').innerHTML='';
   document.getElementById('imSummary').textContent='Reading files\u2026';
   resetImportConfirmUI();
   let filesHtml='';
+  let rejectedCount=0;
   for(const file of files){
     if(IM_CANCEL){document.getElementById('imSummary').textContent='Import cancelled.';return;}
     const text=await file.text();
     const lines=text.split(/\r?\n/);
+
+    // ── Content validation: reject non-WhatsApp files before parsing ──
+    const check=validateWhatsAppContent(lines);
+    if(!check.ok){
+      rejectedCount++;
+      filesHtml+=`<div class="im-file" style="border-color:rgba(255,77,109,.4);background:rgba(255,77,109,.06)"><span class="im-file-icon">⚠️</span><span class="im-file-name" style="color:var(--r)">${esc(file.name)}</span><span class="im-file-info" style="color:var(--r);flex:2">${esc(check.reason)}</span></div>`;
+      continue; // skip this file — don't add to imParsedFiles
+    }
+
     const parsed=parseWhatsAppLines(lines);
     const gm=file.name.match(/WhatsApp[\s_]?Chat[\s_]?with[\s_]?(.+?)\.txt/i);
     const autoGroup=gm?gm[1].replace(/_/g,' '):file.name.replace(/\.txt$/i,'');
@@ -1986,6 +2033,13 @@ async function parseImportFiles(files){
     filesHtml+=`<div class="im-file"><span class="im-file-icon">\uD83D\uDCC4</span><span class="im-file-name">${esc(file.name)}</span><span class="im-file-info">${Object.values(rawCounts).reduce((a,b)=>a+b,0).toLocaleString()} msgs</span><button class="im-file-grp-btn" id="grpBtn-${idx}" type="button" data-grpfile="${idx}"><span class="grp-label">${esc(autoGroup)}</span><span class="grp-arrow">▾</span></button></div>`;
   }
   document.getElementById('imFiles').innerHTML=filesHtml;
+
+  // If every file was rejected, show a clear message and bail out
+  if(imParsedFiles.length===0){
+    document.getElementById('imUnknownWrap').style.display='none';
+    document.getElementById('imSummary').innerHTML=`<span style="color:var(--r)">⚠️ None of the uploaded files look like WhatsApp exports. Export a chat from WhatsApp (Chat → Export Chat → Without Media) and try again.</span>`;
+    return;
+  }
   const allRaw={};imParsedFiles.forEach(f=>Object.entries(f.rawCounts).forEach(([r,c])=>allRaw[r]=(allRaw[r]||0)+c));
   const known=Object.entries(allRaw).filter(([r])=>NAME_MAP[r]);
   const unknown=Object.entries(allRaw).filter(([r])=>!NAME_MAP[r]);
@@ -2254,9 +2308,48 @@ document.addEventListener('mouseout',e=>{
 });
 
 document.getElementById('fileInput').addEventListener('change',async e=>{
-  const files=Array.from(e.target.files).filter(f=>f.name.endsWith('.txt'));
-  if(!files.length)return;
-  openImportModal(files);
+  const raw=Array.from(e.target.files);
+  if(!raw.length) return;
+
+  // Validate file types — reject anything that isn't .txt or .zip
+  const invalid=raw.filter(f=>!f.name.match(/\.(txt|zip)$/i));
+  if(invalid.length){
+    toast(`Invalid file${invalid.length>1?'s':''}: only .txt and .zip are supported`,'err');
+    document.getElementById('fileInput').value='';
+    return;
+  }
+
+  const txtFiles = raw.filter(f => f.name.toLowerCase().endsWith('.txt'));
+  const zipFiles = raw.filter(f => f.name.toLowerCase().endsWith('.zip'));
+
+  // Extract chat .txt files from every zip; ignore vcf, images, videos, and OS meta files
+  const extracted = [];
+  for(const zf of zipFiles){
+    try{
+      const zip = await JSZip.loadAsync(zf);
+      for(const [path, entry] of Object.entries(zip.files)){
+        if(entry.dir) continue;
+        const fname = path.split('/').pop();
+        const fl = fname.toLowerCase();
+        // Skip contacts, media, and hidden OS files
+        if(!fl.endsWith('.txt')) continue;
+        if(fl.startsWith('._') || fl === '.ds_store') continue;
+        const content = await entry.async('string');
+        // Wrap as a File so the rest of the pipeline is untouched
+        extracted.push(new File([new Blob([content],{type:'text/plain'})], fname, {type:'text/plain'}));
+      }
+    } catch(err){
+      console.warn('Could not unzip:', zf.name, err);
+      toast(`Could not read ${zf.name} — skipped`, 'warn');
+    }
+  }
+
+  const allFiles = [...txtFiles, ...extracted];
+  if(!allFiles.length){
+    toast('No WhatsApp chat .txt found — check your zip file', 'warn');
+    return;
+  }
+  openImportModal(allFiles);
 });
 
 bootApp();
