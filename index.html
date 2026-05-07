@@ -34,9 +34,10 @@ body::before{content:'';position:fixed;inset:0;background-image:url("data:image/
 .btn.accent{background:linear-gradient(135deg,var(--p),var(--b));color:#000;border:none;font-weight:700;}
 .btn.accent:hover{opacity:.9;color:#000;}
 #fileInput{display:none;}
-.nav{display:flex;gap:2px;margin-bottom:28px;background:var(--s1);padding:4px;border-radius:8px;border:1px solid var(--border);flex-wrap:wrap;justify-content:center;align-items:center;}
+.nav{display:flex;gap:2px;margin-bottom:28px;background:var(--s1);padding:4px;border-radius:8px;border:1px solid var(--border);flex-wrap:wrap;justify-content:center;align-items:center;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
 .nav::-webkit-scrollbar{display:none;}
-.tab{padding:8px 18px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-radius:6px;font-family:'DM Mono',monospace;font-size:.68rem;letter-spacing:1.5px;text-transform:uppercase;transition:all .18s;white-space:nowrap;-webkit-tap-highlight-color:transparent;}
+@media(max-width:900px){.nav{flex-wrap:nowrap;justify-content:flex-start;}}
+.tab{padding:8px 18px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-radius:6px;font-family:'DM Mono',monospace;font-size:.68rem;letter-spacing:1.5px;text-transform:uppercase;transition:all .18s;white-space:nowrap;-webkit-tap-highlight-color:transparent;flex-shrink:0;}
 .tab:hover{color:var(--text);background:var(--s2);}
 .tab.on{background:var(--s3);color:var(--text);border:1px solid var(--border2);}
 .panel{display:none;animation:fadeUp .22s ease;}
@@ -322,8 +323,6 @@ input.si::placeholder{color:var(--muted);}
   .cg{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));}
   .pcg{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));}
   .hdr-right{width:100%;justify-content:flex-end;}
-  .nav{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
-  .tab{flex-shrink:0;}
   .wrap{padding:0 12px 80px;}
   .hdr{padding:20px 0 16px;}
 }
@@ -598,7 +597,7 @@ input.si::placeholder{color:var(--muted);}
 
 <div id="p-overview" class="panel on">
   <div id="statCards" class="cg">
-    <div class="empty" style="grid-column:1/-1"><div class="ic">📱</div>Import your first WhatsApp chat export<br><small style="opacity:.6">Click &ldquo;+ Import Chats&rdquo; above</small></div>
+    <div class="empty" style="grid-column:1/-1"><div class="ic">📱</div>No chats yet — click <b>+ Import Chats</b> to begin</div>
   </div>
   <div class="chartg" id="overviewCharts" style="display:none">
     <div class="cc wide"><h3>Messages per Person <span class="bdg">All Time</span></h3><div class="cw"><canvas id="barChart"></canvas></div></div>
@@ -609,7 +608,7 @@ input.si::placeholder{color:var(--muted);}
   </div>
   <div class="cc" id="lbCard" style="display:none;margin-bottom:20px"><h3>Leaderboard</h3><div id="lb" class="lb"></div></div>
   <div class="cc" id="streakCard" style="display:none"><h3>Personal Texting Streak <span class="bdg">consecutive days</span></h3><div class="cw short"><canvas id="streakChart"></canvas></div></div>
-  <div class="cc" id="funCard" style="display:none;margin-top:16px"><h3>Fun Stats ✨</h3><div id="funStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px"></div></div>
+  <div class="cc" id="funCard" style="display:none;margin-top:16px"><h3>Fun Stats ✨</h3><div id="funStats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px"></div></div>
 </div>
 
 <div id="p-timeline" class="panel">
@@ -618,7 +617,7 @@ input.si::placeholder{color:var(--muted);}
 </div>
 
 <div id="p-people" class="panel">
-  <div class="stitle">Click any person to see their detailed stats</div>
+  <div class="stitle">Tap any person to explore their detailed stats</div>
   <div id="pCards" class="pcg"></div>
   <div id="pDetail" style="display:none">
     <div class="chartg">
@@ -1230,7 +1229,7 @@ function buildFunStats(){
   for(let h=0;h<24;h++){const hd=STATS.hour_data[''+h]||{};hourTots[h]=Object.values(hd).reduce((a,b)=>a+b,0);}
   const peakH=Object.entries(hourTots).sort((a,b)=>b[1]-a[1])[0]||[0,0];
   const ph=parseInt(peakH[0]),phl=ph===0?'12am':ph<12?ph+'am':ph===12?'12pm':(ph-12)+'pm';
-  // Slowest replier: avg gap between consecutive messages (capped at 8h to ignore overnight gaps)
+  // Slowest & fastest replier: avg gap between consecutive messages (capped at 8h to ignore overnight gaps)
   const sorted=getSorted();
   const gaps={};SENDERS.forEach(s=>gaps[s]={t:0,c:0});
   for(let i=1;i<sorted.length;i++){
@@ -1238,11 +1237,21 @@ function buildFunStats(){
     if(g>0&&g<480){const s=sorted[i].sender;gaps[s].t+=g;gaps[s].c++;}
   }
   const avgGap={};SENDERS.forEach(s=>{if(gaps[s].c>5)avgGap[s]=Math.round(gaps[s].t/gaps[s].c);});
-  const ghostTop=Object.entries(avgGap).sort((a,b)=>b[1]-a[1])[0]||['?',0];
-  // Punctuation vibe
-  let excl=0,quest=0;
-  MESSAGES.forEach(m=>{excl+=(m.content.match(/!/g)||[]).length;quest+=(m.content.match(/\?/g)||[]).length;});
-  const puncts=excl>quest?{sym:'!',lbl:'Exclamation heavy'}:{sym:'?',lbl:'Question heavy'};
+  const sortedGap=Object.entries(avgGap).sort((a,b)=>b[1]-a[1]);
+  const ghostTop=sortedGap[0]||['?',0];
+  const fastTop=sortedGap[sortedGap.length-1]||['?',0];
+  // Squad Vibe: based on punctuation ratio
+  let excl=0,quest=0,total_punc=0;
+  MESSAGES.forEach(m=>{
+    excl+=(m.content.match(/!/g)||[]).length;
+    quest+=(m.content.match(/\?/g)||[]).length;
+  });
+  total_punc=excl+quest;
+  let vibeLabel,vibeEmoji;
+  if(total_punc===0){vibeEmoji='😶';vibeLabel='Very quiet';}
+  else if(excl>quest*2){vibeEmoji='🔥';vibeLabel='Hype squad';}
+  else if(quest>excl*2){vibeEmoji='🤔';vibeLabel='Curious minds';}
+  else{vibeEmoji='⚖️';vibeLabel='Balanced energy';}
   // Total emojis (pre-computed)
   let totalEmoji=0;MESSAGES.forEach(m=>{totalEmoji+=(m.content.match(EMOJI_RE)||[]).length;});
   const items=[
@@ -1250,10 +1259,11 @@ function buildFunStats(){
     {l:'Peak Hour',v:phl,s:peakH[1].toLocaleString()+' msgs',c:'#ffd166'},
     {l:'Longest Msg',v:longMsg.sender,s:longMsg.len+' chars',c:clr(longMsg.sender)},
     {l:'Slowest Replier',v:ghostTop[0],s:ghostTop[1]?'~'+ghostTop[1]+' min avg':'not enough data',c:'#ff8c42'},
-    {l:'Squad Vibe',v:puncts.sym.repeat(3),s:puncts.lbl,c:'#4cc9f0'},
+    {l:'Fastest Replier',v:fastTop[0],s:fastTop[1]?'~'+fastTop[1]+' min avg':'not enough data',c:'#06ffa5'},
+    {l:'Squad Vibe',v:vibeEmoji,s:vibeLabel,c:'#4cc9f0'},
     {l:'Total Emojis',v:totalEmoji.toLocaleString(),s:'sent overall',c:'#f72585'},
   ];
-  document.getElementById('funStats').innerHTML=items.map(x=>`<div class="sc" style="--cc:${x.c}"><div class="lbl">${x.l}</div><div class="val" style="font-size:1.4rem">${esc(String(x.v))}</div><div class="ssub">${x.s}</div></div>`).join('');
+  document.getElementById('funStats').innerHTML=items.map(x=>`<div class="sc" style="--cc:${x.c}"><div class="lbl">${x.l}</div><div class="val" style="font-size:${String(x.v).length>4?'1.6rem':'1.9rem'}">${esc(String(x.v))}</div><div class="ssub">${x.s}</div></div>`).join('');
 }
 
 function populateFilters(){
